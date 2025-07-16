@@ -1501,6 +1501,7 @@ public class InvalidTokenException extends RuntimeException {
         super(message);
     }
 }
+'''
 
 `InvalidTokenException` 클래스는 **잘못된(유효하지 않은) 토큰이 감지되었을 때 발생시키는 사용자 정의 예외 클래스**입니다.
 ---
