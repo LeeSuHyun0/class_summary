@@ -857,3 +857,1078 @@ public ResponseMessage getProfileFromUser(String token)
 이 `ProfileService`는 로그인된 사용자의 프로필 데이터를 안전하게 **읽고, 수정하고, 통계로 분석하는 핵심 서비스 계층**입니다.
 
 > 💡 보안상 중요한 부분(예: ID 변경, 쿠키 제거, 인증 확인)이 잘 처리되어 있어 실제 서비스에서 유용하게 쓰일 수 있는 구조입니다.
+
+
+'''java
+import com.example.noticeboard.admin.login.dto.AdminLoginRequest;
+import com.example.noticeboard.admin.login.service.AdminLoginService;
+import jakarta.servlet.http.HttpServletResponse;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import javax.security.auth.login.AccountException;
+
+@RestController
+@RequiredArgsConstructor
+@RequestMapping("/admin")
+public class AdminLoginController {
+
+    private final AdminLoginService adminLoginService;
+
+    @PostMapping("/login")
+    public ResponseEntity adminLogin(@RequestBody AdminLoginRequest request, HttpServletResponse response) throws AccountException {
+
+        return ResponseEntity.ok().body(adminLoginService.adminLogin(request, response));
+    }
+
+}
+```
+
+`AdminLoginController` 클래스는 관리자 로그인 요청을 처리하는 Spring REST 컨트롤러입니다.
+
+---
+
+## 클래스 및 메서드 기능
+
+### 1. 클래스 역할
+
+* `/admin` 경로 하위 요청을 처리하는 REST API 컨트롤러
+* `AdminLoginService`를 통해 실제 로그인 로직을 수행
+* 관리자 로그인 전용 엔드포인트를 제공합니다.
+
+---
+
+### 2. `adminLogin` 메서드
+
+* HTTP POST 요청을 `/admin/login` 경로에서 받음
+* 요청 본문에 담긴 `AdminLoginRequest` (관리자 로그인 정보 DTO)를 파라미터로 받음
+* `HttpServletResponse` 객체도 받아서, 로그인 처리 시 필요한 응답 헤더나 쿠키 설정에 사용 가능
+* `adminLoginService.adminLogin()` 메서드를 호출해 로그인 처리 후 반환값을 HTTP 200(OK) 응답 본문으로 전달
+* 로그인 실패 시 `AccountException` 예외가 발생할 수 있음
+
+---
+
+## 요약
+
+| 기능          | 설명                                  |
+| ----------- | ----------------------------------- |
+| 관리자 로그인 API | `/admin/login` POST 요청 처리           |
+| 로그인 요청 처리   | 전달받은 로그인 정보로 `adminLoginService` 호출 |
+| 로그인 결과 반환   | 로그인 성공 시 결과를 200 OK 응답으로 반환         |
+| 예외 처리       | 로그인 실패 시 `AccountException` 던짐 가능   |
+
+
+'''java
+import com.example.noticeboard.oauth.service.CustomOAuth2UserService;
+import com.example.noticeboard.oauth.support.CustomAuthenticationFailureHandler;
+import com.example.noticeboard.oauth.support.OAuth2AuthenticationSuccessHandler;
+import com.example.noticeboard.security.jwt.support.JwtAuthenticationFilter;
+import com.example.noticeboard.account.user.constant.UserRole;
+import com.example.noticeboard.admin.visitant.util.SingleVisitInterceptor;
+import com.example.noticeboard.common.exception.FilterExceptionHandler;
+import lombok.RequiredArgsConstructor;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
+import org.springframework.security.config.annotation.web.HttpSecurityBuilder;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.annotation.web.configurers.AbstractAuthenticationFilterConfigurer;
+import org.springframework.security.config.annotation.web.configurers.oauth2.client.OAuth2LoginConfigurer;
+import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.oauth2.client.web.OAuth2LoginAuthenticationFilter;
+import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+
+@Configuration
+@EnableWebSecurity
+@RequiredArgsConstructor
+public class SecurityConfig {
+
+    private final JwtAuthenticationFilter authenticationFilter;
+    private final CustomOAuth2UserService oauth2UserService;
+    private final SingleVisitInterceptor singleVisitInterceptor;
+    private final OAuth2AuthenticationSuccessHandler oauth2AuthenticationSuccessHandler;
+    private final CustomAuthenticationFailureHandler customAuthenticationFailureHandler;
+
+    @Bean
+    public BCryptPasswordEncoder encodePassword() {
+        return new BCryptPasswordEncoder();
+    }
+
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+        http.csrf().disable()
+                .httpBasic().disable()
+                .sessionManagement().sessionCreationPolicy(SessionCreationPolicy.STATELESS)
+                .and()
+                .authorizeHttpRequests()
+                .requestMatchers(HttpMethod.GET, "/admin/**").hasRole(UserRole.MANAGER.name())
+                .requestMatchers(HttpMethod.GET, "/**").permitAll()
+                .requestMatchers(HttpMethod.POST, "/admin/report/**" , "/admin/login", "/mail/**", "/admin/login", "/logins", "/registers", "/oauth/token", "/user/logout").permitAll()
+                .requestMatchers( "/admin/**").hasRole(UserRole.MANAGER.name())
+                .requestMatchers(HttpMethod.POST, "/**").hasAnyRole(UserRole.USER.name(), UserRole.MANAGER.name())
+                .requestMatchers(HttpMethod.PATCH, "/posts/views/**").permitAll()
+                .requestMatchers(HttpMethod.DELETE, "/**").hasAnyRole(UserRole.USER.name(), UserRole.MANAGER.name())
+                .requestMatchers(HttpMethod.PATCH, "/**").permitAll()
+                .requestMatchers(HttpMethod.PUT, "/**").hasAnyRole(UserRole.USER.name(), UserRole.MANAGER.name())
+                .and()
+                // Configures authentication support using an OAuth 2.0 and/or OpenID Connect 1.0 Provider. 
+                .oauth2Login().loginPage("/authorization/denied")
+                // loginPage가 리턴하는 OAuth2LoginConfigurer는 다음과 같음.
+// public final class OAuth2LoginConfigurer<B extends HttpSecurityBuilder<B>>
+// extends AbstractAuthenticationFilterConfigurer<B, org.springframework.security.config.annotation.web.configurers.oauth2.client.OAuth2LoginConfigurer<B>, OAuth2LoginAuthenticationFilter>
+                // OAuth2LoginAuthenticationFilter
+                .successHandler(oauth2AuthenticationSuccessHandler)
+                .failureHandler(customAuthenticationFailureHandler)
+                .userInfoEndpoint().userService(oauth2UserService);
+
+        http.addFilterBefore(new FilterExceptionHandler(),
+                UsernamePasswordAuthenticationFilter.class);
+
+        http.addFilterBefore(singleVisitInterceptor,
+                UsernamePasswordAuthenticationFilter.class
+        );
+
+        http.addFilterBefore(authenticationFilter,
+                UsernamePasswordAuthenticationFilter.class);
+
+        return http.build();
+    }
+```
+---
+
+### ✅ SecurityConfig 클래스란?
+
+`SecurityConfig` 클래스는 Spring Security를 사용하여 **애플리케이션의 보안 설정을 담당**하는 핵심 구성 클래스입니다.
+로그인, 인증, 인가, 필터 추가 등 다양한 보안 관련 기능을 이곳에서 설정하게 됩니다.
+
+---
+
+### 🔒 주요 기능 요약
+
+1. **JWT 인증 방식 사용**
+
+   * 세션을 사용하지 않고, JWT 토큰을 통해 사용자 인증을 처리합니다.
+   * `STATELESS` 설정으로 서버는 로그인 상태를 저장하지 않습니다.
+
+2. **소셜 로그인(OAuth2) 지원**
+
+   * Google, Kakao 등 OAuth2 제공자를 통한 로그인 기능을 제공합니다.
+   * 로그인 성공/실패에 따른 핸들러를 설정하여 추가적인 처리도 가능합니다.
+
+3. **URL별 접근 권한 제어**
+
+   * 어떤 경로는 로그인 없이 접근 가능하도록 허용하고,
+   * 어떤 경로는 특정 역할(예: USER, MANAGER)만 접근할 수 있도록 제한합니다.
+
+4. **보안 기능 설정**
+
+   * CSRF 및 HTTP Basic 인증을 비활성화합니다 (REST API 환경에 맞게).
+   * 세션을 사용하지 않고, 토큰 기반 인증을 사용하도록 설정합니다.
+
+5. **커스텀 필터 추가**
+
+   * JWT 인증 필터
+   * 예외 처리 필터
+   * 방문자 체크 필터 등 필요한 기능을 직접 필터로 추가할 수 있습니다.
+
+---
+
+### 🧩 설정 예시 설명
+
+* `@Bean BCryptPasswordEncoder`
+  → 비밀번호를 안전하게 암호화하여 저장하는 데 사용됩니다.
+
+* `http.csrf().disable()`
+  → CSRF 보호 기능을 끕니다. (세션을 사용하지 않는 REST API에서는 일반적입니다)
+
+* `sessionCreationPolicy(SessionCreationPolicy.STATELESS)`
+  → 서버가 세션을 생성하거나 저장하지 않도록 설정합니다.
+
+* `authorizeHttpRequests()`
+  → 경로별로 접근 권한을 설정합니다.
+
+#### 예시 권한 설정
+
+```plaintext
+GET /admin/**          → MANAGER 역할만 접근 가능
+GET /**                → 누구나 접근 가능
+POST /admin/login 등   → 일부 경로는 로그인 없이 접근 가능
+POST /**               → USER 또는 MANAGER 역할만 접근 가능
+PATCH /posts/views/**  → 누구나 접근 가능
+PATCH /**              → 모두 허용 (주의 필요)
+DELETE /**             → USER 또는 MANAGER만 가능
+```
+
+* `oauth2Login()`
+  → 소셜 로그인 기능 설정
+
+  * 로그인 성공 시 실행할 핸들러
+  * 실패 시 실행할 핸들러
+  * 사용자 정보 조회 서비스 등을 설정할 수 있습니다.
+
+---
+
+### 🧷 필터 등록 (`addFilterBefore`)
+
+Spring Security의 기본 필터 앞에 커스텀 필터들을 등록합니다. 실행 순서가 중요합니다.
+
+```java
+http.addFilterBefore(new FilterExceptionHandler(), UsernamePasswordAuthenticationFilter.class);
+http.addFilterBefore(singleVisitInterceptor, UsernamePasswordAuthenticationFilter.class);
+http.addFilterBefore(authenticationFilter, UsernamePasswordAuthenticationFilter.class);
+```
+
+* `FilterExceptionHandler`: 필터 단계에서 발생한 예외를 처리합니다.
+* `singleVisitInterceptor`: 방문자 수 체크 또는 중복 방문 방지 등의 역할로 추정됩니다.
+* `authenticationFilter`: JWT 토큰을 검사하여 인증을 수행합니다.
+
+---
+
+### 💡 주입되는 주요 의존성들
+
+* `JwtAuthenticationFilter`: JWT 토큰을 검증하고 인증 처리
+* `CustomOAuth2UserService`: 소셜 로그인 시 사용자 정보를 불러옴
+* `OAuth2AuthenticationSuccessHandler`: 소셜 로그인 성공 시 실행되는 로직 처리
+* `CustomAuthenticationFailureHandler`: 소셜 로그인 실패 시 처리
+* `SingleVisitInterceptor`: 특정 요청의 방문 제어 로직 담당
+
+---
+
+### ✨ 정리
+
+`SecurityConfig`는 다음과 같은 기능을 담당합니다:
+
+* JWT 기반 로그인 처리
+* 소셜 로그인(OAuth2) 연동
+* URL 경로별로 접근 권한 세밀하게 제어
+* 보안 필터를 추가하여 인증, 예외 처리 등 다양한 보안 로직 적용
+
+이러한 설정을 통해 REST API 환경에서 보다 안전하고 효율적인 인증/인가 처리를 구성할 수 있습니다.
+
+
+'''java
+import com.example.noticeboard.common.response.ResponseCode;
+import com.example.noticeboard.common.response.ResponseMessage;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+@RequiredArgsConstructor
+public class SecurityController {
+
+    @GetMapping(value = "/authorization/denied")
+    public ResponseEntity<ResponseMessage> informAuthorizationDenied() {
+        ResponseMessage message = ResponseMessage.of(ResponseCode.AUTHORIZATION_ERROR , "로그인이 필요한 서비스입니다.");
+
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(message);
+    }
+
+}
+```
+
+`SecurityController` 클래스는 **Spring Security에서 인가(Authorization) 실패 시 사용자에게 알림을 제공하는 컨트롤러**입니다.
+
+---
+
+### ✅ 클래스 설명
+
+```java
+@RestController
+@RequiredArgsConstructor
+public class SecurityController { ... }
+```
+
+* `@RestController`: REST API 응답을 제공하는 컨트롤러입니다. (`@Controller + @ResponseBody`)
+* `@RequiredArgsConstructor`: final 또는 @NonNull 필드에 대해 자동으로 생성자를 생성합니다.
+  이 클래스에서는 필드가 없기 때문에 사실상 의미는 없습니다.
+
+---
+
+### ✅ 메서드: `informAuthorizationDenied()`
+
+```java
+@GetMapping(value = "/authorization/denied")
+public ResponseEntity<ResponseMessage> informAuthorizationDenied() {
+    ResponseMessage message = ResponseMessage.of(ResponseCode.AUTHORIZATION_ERROR , "로그인이 필요한 서비스입니다.");
+    return ResponseEntity.status(HttpStatus.FORBIDDEN).body(message);
+}
+```
+
+#### 기능 설명:
+
+* **URL**: `/authorization/denied`로 GET 요청이 들어왔을 때 실행됩니다.
+* **의도된 사용처**: 사용자가 로그인이 필요한 페이지에 접근했지만 **로그인하지 않았거나 권한이 없는 경우**, 이 URL로 리다이렉트되도록 설정하는 경우입니다.
+* **ResponseMessage**: 커스텀 응답 객체를 사용하여 일관된 형식으로 응답을 줍니다.
+
+  * 예: `ResponseCode.AUTHORIZATION_ERROR` (아마도 코드값이 `403` 또는 관련 메시지일 것으로 추정됩니다)
+  * 메시지: `"로그인이 필요한 서비스입니다."`
+* **HTTP 상태코드**: `403 Forbidden`
+  → 인증은 되었지만, 해당 리소스를 사용할 권한이 없음을 의미합니다.
+
+---
+
+### 💬 쉽게 정리하면
+
+이 컨트롤러는 로그인하지 않았거나 권한이 없을 때
+👉 사용자에게 `"로그인이 필요한 서비스입니다."`라는 메시지를 `403` 상태코드와 함께 보내주는 역할을 합니다.
+주로 **Spring Security의 OAuth2 실패 처리 또는 접근 거부 리다이렉트** 경로로 사용됩니다.
+
+
+'''java
+public class TokenForgeryException extends RuntimeException {
+    private static final long serialVersionUID = 1L;
+
+    public TokenForgeryException(String message) {
+        super(message);
+    }
+
+}
+```
+`TokenForgeryException` 클래스는 **JWT 토큰 위조(변조)** 상황에서 사용되는 **사용자 정의 예외 클래스**입니다. 
+
+---
+
+### ✅ 클래스 설명
+
+```java
+public class TokenForgeryException extends RuntimeException {
+    private static final long serialVersionUID = 1L;
+
+    public TokenForgeryException(String message) {
+        super(message);
+    }
+}
+```
+
+#### 🔹 기본 구조
+
+* `RuntimeException`을 상속 → **Unchecked 예외**
+
+  * 예외 처리를 반드시 try-catch로 하지 않아도 됩니다.
+  * 보통 개발자가 의도한 예외 상황에 사용됩니다.
+
+* `serialVersionUID`: 자바에서 직렬화(Serializable)를 사용하는 클래스가 변경되었을 때 버전 관리를 도와주는 값입니다. 필수는 아니지만, 명시하는 것이 좋습니다.
+
+* 생성자:
+
+  ```java
+  public TokenForgeryException(String message) {
+      super(message);
+  }
+  ```
+
+  * 예외 발생 시 전달된 메시지를 부모 클래스에 넘겨서 예외 메시지로 사용할 수 있게 합니다.
+
+---
+
+### 💡 사용 목적
+
+이 예외는 주로 **JWT 토큰을 검증**할 때,
+
+* 유효하지 않은 서명
+* 위조된 내용
+* 토큰 값이 조작됨 등
+
+의심스러운 JWT가 감지되었을 때 다음과 같이 사용될 수 있습니다:
+
+```java
+if (!isValid(token)) {
+    throw new TokenForgeryException("토큰이 위조되었거나 유효하지 않습니다.");
+}
+```
+
+---
+
+### ✨ 요약
+
+| 항목     | 설명                                  |
+| ------ | ----------------------------------- |
+| 클래스 이름 | `TokenForgeryException`             |
+| 상속     | `RuntimeException` (Unchecked 예외)   |
+| 용도     | JWT 등 **토큰이 위조되었을 때 예외를 던지기 위해 사용** |
+| 예외 메시지 | 생성자에서 직접 설정 가능 (`super(message)`)   |
+
+
+```java
+import com.example.noticeboard.security.jwt.dto.Token;
+import jakarta.persistence.*;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+
+@Builder
+@Entity
+@Getter
+@NoArgsConstructor
+@AllArgsConstructor
+public class RefreshToken {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @Column(nullable = false)
+    private Long tokenId;
+
+    @Column(nullable = false)
+    private String token;
+
+    @Column(nullable = false)
+    private String keyEmail;
+
+    public static RefreshToken defaultRefreshToken() {
+        return RefreshToken.builder()
+                .tokenId(1L)
+                .token(" ")
+                .keyEmail(" ")
+                .build();
+    }
+
+    public static RefreshToken createRefreshToken(Token token) {
+        return RefreshToken.builder()
+                .keyEmail(token.getKey())
+                .token(token.getRefreshToken())
+                .build();
+    }
+
+}
+```
+`RefreshToken` 클래스는 **사용자의 리프레시 토큰을 데이터베이스에 저장하고 관리하기 위한 JPA 엔티티 클래스**입니다. 
+
+---
+
+### ✅ 클래스 설명
+
+```java
+@Builder
+@Entity
+@Getter
+@NoArgsConstructor
+@AllArgsConstructor
+public class RefreshToken { ... }
+```
+
+* `@Entity`: 이 클래스는 JPA가 관리하는 테이블로 매핑됩니다. → 실제 DB에 `refresh_token` 같은 테이블로 저장됩니다.
+* `@Builder`: 빌더 패턴을 사용하여 객체를 쉽게 생성할 수 있게 합니다.
+* `@Getter`: 모든 필드에 대한 getter 메서드를 자동 생성합니다.
+* `@NoArgsConstructor` / `@AllArgsConstructor`: 기본 생성자와 모든 필드를 인자로 받는 생성자를 생성합니다.
+
+---
+
+### ✅ 필드 설명
+
+```java
+@Id
+@GeneratedValue(strategy = GenerationType.IDENTITY)
+@Column(nullable = false)
+private Long tokenId;
+```
+
+* 기본키(`PK`) 역할을 하는 ID입니다.
+* `IDENTITY` 전략은 DB에서 자동 증가되는 값(AUTO\_INCREMENT)을 의미합니다.
+
+```java
+@Column(nullable = false)
+private String token;
+```
+
+* 실제 저장되는 **리프레시 토큰 값**입니다.
+
+```java
+@Column(nullable = false)
+private String keyEmail;
+```
+
+* 토큰과 연결된 사용자 식별 키(예: 이메일)를 저장합니다.
+
+---
+
+### ✅ 메서드 설명
+
+#### 1. `defaultRefreshToken()`
+
+```java
+public static RefreshToken defaultRefreshToken() {
+    return RefreshToken.builder()
+            .tokenId(1L)
+            .token(" ")
+            .keyEmail(" ")
+            .build();
+}
+```
+
+* 기본값으로 채워진 "빈 리프레시 토큰 객체"를 생성합니다.
+* 예외 상황 등에서 **기본 토큰 객체**가 필요할 때 사용합니다.
+
+#### 2. `creareRefreshToken(Token token)`
+
+```java
+public static RefreshToken creareRefreshToken(Token token) {
+    return RefreshToken.builder()
+            .keyEmail(token.getKey())
+            .token(token.getRefreshToken())
+            .build();
+}
+```
+
+* 전달받은 `Token` 객체로부터 필요한 정보를 꺼내서 `RefreshToken` 객체를 생성합니다.
+* `Token` 클래스에는 아마도 `getKey()`와 `getRefreshToken()` 메서드가 정의되어 있을 것입니다.
+
+---
+
+### ✨ 요약
+
+| 항목    | 설명                                                          |
+| ----- | ----------------------------------------------------------- |
+| 목적    | 리프레시 토큰을 DB에 저장하기 위한 JPA 엔티티                                |
+| 주요 필드 | `tokenId`, `token`, `keyEmail`                              |
+| 사용 예  | 로그인 시 발급한 리프레시 토큰을 DB에 저장하거나 갱신할 때 사용                       |
+| 특징    | `@Builder` 패턴으로 객체 생성 편리, `default`와 `create` 메서드로 유틸 기능 제공 |
+
+
+```java
+import lombok.*;
+
+@Builder
+@Getter
+@Setter
+@NoArgsConstructor
+@AllArgsConstructor
+public class Token {
+    private String grantType;
+    private String accessToken;
+    private String refreshToken;
+    private String key;
+}
+```
+`Token` 클래스는 \*\*JWT 관련 정보(Access Token, Refresh Token 등)를 담는 DTO(Data Transfer Object)\*\*입니다. 이 DTO는 주로 **로그인 성공 시 클라이언트에게 토큰을 전달하거나**,
+**DB에 RefreshToken을 저장할 때 정보를 옮기기 위해 사용됩니다.**
+
+---
+
+### ✅ 클래스 개요
+
+```java
+@Builder
+@Getter
+@Setter
+@NoArgsConstructor
+@AllArgsConstructor
+public class Token { ... }
+```
+
+#### 📌 Lombok 애노테이션 설명
+
+* `@Builder`: 빌더 패턴을 사용할 수 있게 해 줍니다 (예: `Token.builder().accessToken("...").build()`).
+* `@Getter`, `@Setter`: 모든 필드에 대해 Getter/Setter 자동 생성.
+* `@NoArgsConstructor`: 기본 생성자 생성.
+* `@AllArgsConstructor`: 모든 필드를 받는 생성자 생성.
+
+---
+
+### ✅ 필드 설명
+
+```java
+private String grantType;
+```
+
+* 일반적으로 "Bearer" 문자열이 들어갑니다.
+* 클라이언트가 인증 헤더에 `Authorization: Bearer [AccessToken]` 형식으로 전송할 때 사용됩니다.
+
+```java
+private String accessToken;
+```
+
+* 실제 로그인 후 발급되는 JWT **액세스 토큰**입니다.
+* 클라이언트가 서버에 API 요청할 때 인증 수단으로 사용합니다.
+
+```java
+private String refreshToken;
+```
+
+* 액세스 토큰이 만료되었을 때, **새로운 토큰을 발급받기 위해 사용되는 토큰**입니다.
+* 보통 DB나 Redis 등에 저장해두고, 일정 기간 내 재발급 요청이 오면 새로운 액세스 토큰을 만들어 줍니다.
+
+```java
+private String key;
+```
+
+* 이 토큰이 어떤 사용자에게 속하는지 식별하는 값입니다.
+* 보통 **이메일 또는 사용자 ID** 역할을 합니다.
+  → 이 값은 `RefreshToken` 엔티티의 `keyEmail` 필드로 매핑되어 저장됩니다.
+
+---
+
+### ✨ 정리
+
+| 필드명            | 설명                      |
+| -------------- | ----------------------- |
+| `grantType`    | 토큰의 타입 ("Bearer" 등)     |
+| `accessToken`  | 사용자 인증에 사용되는 JWT 액세스 토큰 |
+| `refreshToken` | 재발급 요청 시 사용하는 리프레시 토큰   |
+| `key`          | 사용자 식별용 키 (이메일, ID 등)   |
+
+---
+
+### 💡 사용 예시
+
+```java
+Token token = Token.builder()
+    .grantType("Bearer")
+    .accessToken("eyJhbGciOiJIUzI1...")
+    .refreshToken("dskjlfsdfsdj...")
+    .key("user@email.com")
+    .build();
+```
+
+→ 이처럼 로그인 성공 후 `Token` 객체를 만들어서 클라이언트에 전달하거나,
+→ `RefreshToken.createRefreshToken(token)` 으로 DB에 저장하는 데 활용합니다.
+
+
+'''java
+public class InvalidTokenException extends RuntimeException {
+    private static final long serialVersionUID = 1L;
+
+    public InvalidTokenException(String message) {
+        super(message);
+    }
+}
+
+`InvalidTokenException` 클래스는 **잘못된(유효하지 않은) 토큰이 감지되었을 때 발생시키는 사용자 정의 예외 클래스**입니다.
+---
+
+### ✅ 클래스 설명
+
+```java
+public class InvalidTokenException extends RuntimeException {
+    private static final long serialVersionUID = 1L;
+
+    public InvalidTokenException(String message) {
+        super(message);
+    }
+}
+```
+
+* `RuntimeException`을 상속한 **unchecked 예외**입니다.
+  → 예외 처리(try-catch)가 강제되지 않으며, 토큰 검증 과정에서 문제가 발견되면 던집니다.
+
+* `serialVersionUID`: 자바 직렬화 시 클래스 버전 관리용 필드로, 명시적으로 선언하여 안정성을 높입니다.
+
+* 생성자에서 예외 메시지를 받아 부모 클래스인 `RuntimeException`에 전달합니다.
+
+---
+
+### 💡 사용 목적
+
+이 예외는 JWT 또는 기타 토큰 검증 과정에서 다음과 같은 상황에 사용할 수 있습니다:
+
+* 토큰이 아예 없거나 (null 또는 빈 문자열)
+* 토큰 형식이 올바르지 않음
+* 토큰이 만료되었거나 변조된 경우
+* 기타 토큰 검증에서 실패한 경우
+
+예를 들어,
+
+```java
+if (!isValid(token)) {
+    throw new InvalidTokenException("유효하지 않은 토큰입니다.");
+}
+```
+
+이렇게 토큰 검증 실패를 명확하게 알리고, 이후 예외 처리 핸들러에서 적절히 응답할 수 있도록 합니다.
+
+---
+
+### ✨ 요약
+
+| 항목     | 내용                                |
+| ------ | --------------------------------- |
+| 클래스 이름 | `InvalidTokenException`           |
+| 상속     | `RuntimeException` (unchecked 예외) |
+| 용도     | 유효하지 않은 토큰 발견 시 던지는 예외            |
+| 메시지 전달 | 생성자에서 예외 메시지 설정 가능                |
+
+
+```java
+import java.util.Optional;
+
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+
+import com.example.noticeboard.security.jwt.domain.RefreshToken;
+
+public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long> {
+	   Optional<RefreshToken> findByToken(String token);
+
+	   @Query(value = "SELECT p from RefreshToken p where p.keyEmail = :userEmail")
+	   Optional<RefreshToken> existsByKeyEmail(@Param("userEmail") String userEmail);
+
+	   void deleteByKeyEmail(String userEmail);
+}
+```
+
+`RefreshTokenRepository` 인터페이스는 **JPA를 이용해 `RefreshToken` 엔티티에 접근하는 데이터베이스 레포지토리** 역할을 합니다.
+
+---
+
+### ✅ 인터페이스 개요
+
+```java
+public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long> { ... }
+```
+
+* `JpaRepository<RefreshToken, Long>`를 상속하여 기본 CRUD 기능과 페이징, 정렬 기능을 사용할 수 있습니다.
+* `RefreshToken` 엔티티를 `tokenId(Long)`를 기본 키로 관리합니다.
+
+---
+
+### ✅ 주요 메서드 기능
+
+#### 1. `Optional<RefreshToken> findByToken(String token)`
+
+* **기능**: DB에서 리프레시 토큰 값(`token` 필드)으로 해당 토큰 정보를 찾습니다.
+* **반환**: 토큰이 존재하면 `Optional` 안에 `RefreshToken` 객체를, 없으면 빈 `Optional` 반환.
+
+---
+
+#### 2. `Optional<RefreshToken> existsByKeyEmail(@Param("userEmail") String userEmail)`
+
+* **기능**: `keyEmail` 컬럼에 특정 이메일(`userEmail`)이 존재하는지 확인하는 커스텀 쿼리입니다.
+* **JPQL 사용**: `"SELECT p from RefreshToken p where p.keyEmail = :userEmail"`
+
+  * `p`는 `RefreshToken` 엔티티의 별칭입니다.
+* **반환**: 해당 이메일에 연결된 리프레시 토큰이 있으면 `Optional`에 담아 반환, 없으면 빈 값 반환.
+
+---
+
+#### 3. `void deleteByKeyEmail(String userEmail)`
+
+* **기능**: 특정 이메일(`keyEmail`)에 해당하는 리프레시 토큰을 삭제합니다.
+* 이메일에 해당하는 토큰을 DB에서 제거할 때 사용합니다.
+
+---
+
+### ✨ 요약
+
+| 메서드 이름                     | 기능 설명                               |
+| -------------------------- | ----------------------------------- |
+| `findByToken(String)`      | 토큰 값을 이용해 `RefreshToken` 조회         |
+| `existsByKeyEmail(String)` | 이메일로 리프레시 토큰 존재 여부 확인 (Optional 반환) |
+| `deleteByKeyEmail(String)` | 이메일로 리프레시 토큰 삭제                     |
+
+---
+
+### 💡 실제 사용 예시
+
+```java
+// 토큰 조회
+Optional<RefreshToken> refreshToken = refreshTokenRepository.findByToken(tokenString);
+
+// 이메일로 토큰 존재 여부 확인
+Optional<RefreshToken> tokenByEmail = refreshTokenRepository.existsByKeyEmail(userEmail);
+
+// 이메일로 토큰 삭제
+refreshTokenRepository.deleteByKeyEmail(userEmail);
+
+
+'''java
+import com.example.noticeboard.common.response.ResponseCode;
+import com.example.noticeboard.common.response.ResponseMessage;
+import com.example.noticeboard.security.exception.TokenForgeryException;
+import com.example.noticeboard.security.jwt.repository.RefreshTokenRepository;
+import com.example.noticeboard.security.jwt.support.CookieSupport;
+import com.example.noticeboard.security.jwt.support.JwtTokenProvider;
+import com.example.noticeboard.security.jwt.domain.RefreshToken;
+import com.example.noticeboard.security.jwt.dto.Token;
+import jakarta.servlet.http.Cookie;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.Arrays;
+import java.util.NoSuchElementException;
+
+import static com.example.noticeboard.security.jwt.domain.RefreshToken.creareRefreshToken;
+
+@Service
+@RequiredArgsConstructor
+public class JwtService {
+    private final JwtTokenProvider jwtTokenProvider;
+    private final RefreshTokenRepository refreshTokenRepository;
+
+    @Transactional
+    public void login(Token token) {
+        RefreshToken refreshToken = creareRefreshToken(token);
+        String loginUserEmail = refreshToken.getKeyEmail();
+
+        refreshTokenRepository.existsByKeyEmail(loginUserEmail).ifPresent(a -> {
+            refreshTokenRepository.deleteByKeyEmail(loginUserEmail);
+        });
+
+        refreshTokenRepository.save(refreshToken);
+    }
+
+    public RefreshToken getRefreshToken(HttpServletRequest request) {
+        String refreshToken = getRefreshTokenFromHeader(request);
+
+        return refreshTokenRepository.findByToken(refreshToken)
+                .orElseThrow(() -> new TokenForgeryException("알 수 없는 RefreshToken 입니다."));
+    }
+
+    public ResponseMessage validateRefreshToken(HttpServletRequest request , HttpServletResponse response) {
+        try {
+            RefreshToken token = getRefreshToken(request);
+            String accessToken = jwtTokenProvider.validateRefreshToken(token);
+
+            response.addHeader("Set-Cookie" , CookieSupport.createAccessToken(accessToken).toString());
+
+            return ResponseMessage.of(ResponseCode.CREATE_ACCESS_TOKEN);
+        } catch (NoSuchElementException e) {
+            CookieSupport.deleteJwtTokenInCookie(response);
+
+            throw new TokenForgeryException("변조된 RefreshToken 입니다.");
+        }
+    }
+
+    public String getRefreshTokenFromHeader(HttpServletRequest request) {
+        Cookie cookies[] = request.getCookies();
+
+        if (cookies != null && cookies.length != 0) {
+            return Arrays.stream(cookies)
+                    .filter(c -> c.getName().equals("refreshToken")).findFirst().map(Cookie::getValue)
+                    .orElseThrow(() -> new SecurityException("인증되지 않은 사용자입니다."));
+        }
+
+        throw new SecurityException("인증되지 않은 사용자입니다.");
+    }
+
+}
+```
+`JwtService` 클래스는 JWT 인증에서 **리프레시 토큰 관리 및 검증**을 담당하는 서비스 클래스입니다.
+
+---
+
+# JwtService 클래스 기능 요약
+
+* 리프레시 토큰 저장, 삭제, 검증을 수행합니다.
+* 클라이언트의 요청에서 리프레시 토큰을 쿠키에서 읽어와 검증합니다.
+* 리프레시 토큰 유효성 검사 후 새 액세스 토큰을 발급하고, 쿠키에 담아 응답합니다.
+* 위조된 토큰에 대해선 예외를 발생시키고, 쿠키를 삭제합니다.
+
+---
+
+## 필드
+
+```java
+private final JwtTokenProvider jwtTokenProvider;
+private final RefreshTokenRepository refreshTokenRepository;
+```
+
+* `JwtTokenProvider`: JWT 토큰 생성 및 검증을 담당하는 컴포넌트.
+* `RefreshTokenRepository`: 리프레시 토큰 저장소(DB) 접근용 인터페이스.
+
+---
+
+## 주요 메서드
+
+### 1. `login(Token token)`
+
+* 로그인 성공 시 호출.
+* `Token` DTO로부터 리프레시 토큰 정보를 만들어서(`creareRefreshToken`)
+* 이미 DB에 존재하는 같은 이메일(`keyEmail`)의 리프레시 토큰이 있다면 삭제 후
+* 새 리프레시 토큰을 저장합니다.
+
+즉, 사용자별로 하나의 최신 리프레시 토큰만 유지하는 역할을 합니다.
+
+---
+
+### 2. `getRefreshToken(HttpServletRequest request)`
+
+* HTTP 요청의 쿠키에서 리프레시 토큰을 추출(`getRefreshTokenFromHeader` 메서드 활용)
+* 추출한 토큰을 DB에서 찾아서 반환
+* DB에 없으면 `TokenForgeryException` (위조 토큰 예외)을 발생시킵니다.
+
+---
+
+### 3. `validateRefreshToken(HttpServletRequest request, HttpServletResponse response)`
+
+* 클라이언트 요청의 리프레시 토큰을 검증합니다.
+* 정상 토큰이면 `jwtTokenProvider`를 통해 새 액세스 토큰을 생성하고
+* 새 액세스 토큰을 쿠키에 넣어 응답 헤더에 추가합니다.
+* 처리 성공 시 `ResponseMessage`에 성공 코드(`CREATE_ACCESS_TOKEN`)를 담아 반환합니다.
+* 예외 발생 시 (토큰 위조, DB 미존재 등)
+
+  * 클라이언트 쿠키에서 JWT 토큰을 삭제하고
+  * `TokenForgeryException` 예외를 던집니다.
+
+---
+
+### 4. `getRefreshTokenFromHeader(HttpServletRequest request)`
+
+* HTTP 요청 쿠키에서 이름이 `"refreshToken"`인 쿠키 값을 찾아 반환합니다.
+* 없으면 `SecurityException("인증되지 않은 사용자입니다.")`를 던집니다.
+
+---
+
+## 추가 설명
+
+* `creareRefreshToken(Token token)` 메서드는 `RefreshToken` 엔티티를 생성하는 static 메서드로, 토큰 DTO에서 정보를 꺼내서 만듭니다.
+* 쿠키 관리(`CookieSupport.createAccessToken()`, `CookieSupport.deleteJwtTokenInCookie()`)는 별도의 유틸 클래스로 처리하고 있습니다.
+* `@Transactional`이 붙은 `login` 메서드는 DB에 저장과 삭제 작업을 트랜잭션 단위로 처리하여 안전성을 보장합니다.
+
+---
+
+## 전체적인 역할
+
+* 로그인 시 리프레시 토큰을 DB에 저장/갱신
+* 클라이언트 요청 시 쿠키에서 리프레시 토큰을 읽어와 검증
+* 검증 완료 시 새 액세스 토큰을 생성해 쿠키에 넣어 응답
+* 위조나 만료 등 문제 발생 시 예외 처리 및 쿠키 삭제
+
+
+'''java
+import com.example.noticeboard.security.jwt.dto.Token;
+import jakarta.servlet.http.Cookie;
+import jakarta.servlet.http.HttpServletResponse;
+import lombok.NoArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.ResponseCookie;
+
+@NoArgsConstructor(access = lombok.AccessLevel.PRIVATE)
+public class CookieSupport {
+
+    @Value("${server.url}")
+    private static String DOMAIN_URL;
+
+    public static ResponseCookie createAccessToken(String access) {
+        return ResponseCookie.from("accessToken" , access)
+                .path("/")
+                .maxAge(30 * 60 * 1000)
+                .secure(true)
+                .domain(DOMAIN_URL)
+                .httpOnly(true)
+                .sameSite("none")
+                .build();
+    }
+
+    public static ResponseCookie createRefreshToken(String refresh) {
+        return ResponseCookie.from("refreshToken" , refresh)
+                .path("/")
+                .maxAge(14 * 24 * 60 * 60 * 1000)
+                .secure(true)
+                .domain(DOMAIN_URL)
+                .httpOnly(true)
+                .sameSite("none")
+                .build();
+    }
+
+    public static void setCookieFromJwt(Token token , HttpServletResponse response) {
+        response.addHeader("Set-Cookie" , createAccessToken(token.getAccessToken()).toString());
+        response.addHeader("Set-Cookie" , createRefreshToken(token.getRefreshToken()).toString());
+    }
+
+    public static void deleteJwtTokenInCookie(HttpServletResponse response) {
+        Cookie accessToken = new Cookie("accessToken", null);
+        accessToken.setPath("/");
+        accessToken.setMaxAge(0);
+        accessToken.setDomain(DOMAIN_URL);
+
+        Cookie refreshToken = new Cookie("refreshToken", null);
+        refreshToken.setPath("/");
+        refreshToken.setMaxAge(0);
+        refreshToken.setDomain(DOMAIN_URL);
+
+        response.addCookie(accessToken);
+        response.addCookie(refreshToken);
+    }
+
+}
+```
+`CookieSupport` 클래스는 JWT 토큰 관련 쿠키를 생성, 설정, 삭제하는 **쿠키 유틸리티 클래스**입니다.
+
+---
+
+## 클래스 개요
+
+* 쿠키 관련 작업을 모아둔 헬퍼 클래스입니다.
+* `@NoArgsConstructor(access = lombok.AccessLevel.PRIVATE)` 로 생성자를 private 처리하여 인스턴스화 방지(유틸 클래스 목적).
+* `DOMAIN_URL`은 쿠키 도메인 설정에 사용되는데, `@Value`로 외부에서 주입하려 했지만 `static` 필드에는 적용되지 않아 실제 값 주입 안 될 가능성이 있습니다.(주석 참고)
+
+---
+
+## 주요 메서드
+
+### 1. `createAccessToken(String access)`
+
+```java
+public static ResponseCookie createAccessToken(String access)
+```
+
+* 이름: `"accessToken"`
+* 값: 액세스 토큰 문자열
+* 경로: `/` (도메인 전체에서 접근 가능)
+* 만료 시간: 30분 (`30 * 60 * 1000` 밀리초, 다만 `maxAge()`는 초 단위라 오작동 가능성 있음)
+* 보안 설정: `secure=true` (HTTPS에서만 전송)
+* 도메인: `DOMAIN_URL`
+* HttpOnly: true (JS에서 쿠키 접근 불가)
+* SameSite: `"none"` (크로스 사이트 요청 시에도 쿠키 전송 허용)
+* 반환: Spring의 `ResponseCookie` 객체
+
+---
+
+### 2. `createRefreshToken(String refresh)`
+
+* 이름: `"refreshToken"`
+* 값: 리프레시 토큰 문자열
+* 경로: `/`
+* 만료 시간: 14일 (`14 * 24 * 60 * 60 * 1000` 밀리초, 역시 `maxAge()` 초 단위 주의)
+* 기타 설정은 `createAccessToken`과 동일
+
+---
+
+### 3. `setCookieFromJwt(Token token, HttpServletResponse response)`
+
+* 액세스 토큰과 리프레시 토큰을 각각 쿠키로 만들어
+* 응답 헤더 `"Set-Cookie"`에 추가합니다.
+* 즉, 로그인 등 토큰 발급 시 클라이언트에게 두 개의 쿠키를 전달하는 역할입니다.
+
+---
+
+### 4. `deleteJwtTokenInCookie(HttpServletResponse response)`
+
+* `"accessToken"`과 `"refreshToken"` 쿠키를 삭제합니다.
+* 쿠키의 값은 `null`로, `maxAge`를 `0`으로 설정하여 즉시 만료시킵니다.
+* 도메인과 경로도 지정하여 삭제 대상 쿠키가 정확하게 매칭되도록 합니다.
+* 주로 로그아웃 시 쿠키를 클라이언트에서 제거할 때 사용합니다.
+
+---
+
+## 주의 사항 및 개선점
+
+* `@Value("${server.url}")` 는 `static` 필드에는 자동 주입이 안 됩니다.
+  → 현재 `DOMAIN_URL` 값이 주입되지 않을 수 있으니, 다른 방법 (예: `@Component`로 바꾸고 인스턴스 필드로 사용하거나, 생성자 주입)으로 관리하는 것이 좋습니다.
+
+* `maxAge` 메서드 인자는 초 단위인데, 현재는 밀리초 단위 값이 들어가 있어 쿠키 만료 시간이 비정상적일 수 있습니다.
+  → `maxAge(30 * 60)` (30분 = 1800초) 또는 `maxAge(14 * 24 * 60 * 60)` (14일) 로 수정하는 것이 맞습니다.
+
+---
+
+## 요약
+
+| 기능            | 설명                                     |
+| ------------- | -------------------------------------- |
+| 액세스 토큰 쿠키 생성  | `accessToken` 이름의 쿠키를 만들어 보안 설정과 함께 반환 |
+| 리프레시 토큰 쿠키 생성 | `refreshToken` 이름의 쿠키를 만들어 반환          |
+| 쿠키 응답 헤더 설정   | 로그인 시 두 토큰 쿠키를 HTTP 응답에 포함             |
+| 쿠키 삭제         | 로그아웃 시 쿠키 삭제용으로 만료시킨 쿠키를 응답에 추가        |
